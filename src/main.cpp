@@ -10,6 +10,12 @@
 #define LED 12   // LED
 #define BUZZ 8   // Buzzer
 
+// Pinos para o decodificador BCD
+#define BCD_A 3
+#define BCD_B 5  
+#define BCD_C 4
+#define BCD_D 2
+
 #include <Arduino.h>
 #include <math.h>
 #include "AcksenButton.h"
@@ -40,13 +46,12 @@ struct controlIO
   bool digitalReadings[4];
 } typedef cIO;
 
-// CONSTANTES REVISADAS
+// CONSTANTES
 const int SENSIBILIDADE = 750;
-const int LONGPRESS = 2000;
-const int BASE_SPEED = 200;           // Velocidade balanceada
+const int BASE_SPEED = 200;
 const int AJUSTE_ESQUERDO = 25;
 const int AJUSTE_DIREITO = 0;
-const int TURN_SPEED = 180;           // Correção forte
+const int TURN_SPEED = 180;
 const int WIGGLE_DURATION = 3000;
 const float WAVE_FREQUENCY = 0.8;
 
@@ -55,11 +60,16 @@ unsigned long lastDebugTime = 0;
 unsigned long debugInterval = 500;
 bool ligado = false;
 bool isWiggling = false;
-bool linhaHorizontalDetectada = false;
 unsigned long sineWaveStartTime = 0;
 const unsigned long debounce = 50;
 int turnFactor = 0;
 int lastTurnFactor = 0;
+
+// NOVAS VARIÁVEIS PARA CONTADOR
+int contadorFitais = 0;
+bool ultimoEstadoHorizontal = false;
+unsigned long lastBuzzerTime = 0;
+const unsigned long BUZZER_DURATION = 300;
 
 // DECLARAÇÕES DE FUNÇÕES
 void setMotorsBalanceados(int leftSpeed, int rightSpeed);
@@ -69,12 +79,14 @@ void atualizarLeiturasDigitais();
 void debugSensores();
 bool verificarBotao();
 void beep(int duration);
-void seguirlinhaCorrigida();  // FUNÇÃO REVISADA
+void seguirlinhaCorrigida();
 bool detectarLinhaHorizontal();
+void displayDigit(int digit);
+void atualizarDisplay();
 
 // INSTÂNCIAS
 cIO robo;
-AcksenButton button(BUT, ACKSEN_BUTTON_MODE_LONGPRESS, debounce, INPUT);
+AcksenButton button(BUT, ACKSEN_BUTTON_MODE_NORMAL, debounce, INPUT);
 
 void setMotorsBalanceados(int leftSpeed, int rightSpeed)
 {
@@ -134,6 +146,78 @@ bool detectarLinhaHorizontal()
   return true;
 }
 
+// FUNÇÃO PARA ATUALIZAR O DISPLAY BCD
+void displayDigit(int digit)
+{
+  switch (digit) {
+    case 0:
+      digitalWrite(BCD_A, LOW);
+      digitalWrite(BCD_B, LOW);
+      digitalWrite(BCD_C, LOW);
+      digitalWrite(BCD_D, LOW);
+      break;
+    case 1:
+      digitalWrite(BCD_A, HIGH);
+      digitalWrite(BCD_B, LOW);
+      digitalWrite(BCD_C, LOW);
+      digitalWrite(BCD_D, LOW);
+      break;
+    case 2:
+      digitalWrite(BCD_A, LOW);
+      digitalWrite(BCD_B, HIGH);
+      digitalWrite(BCD_C, LOW);
+      digitalWrite(BCD_D, LOW);
+      break;
+    case 3:
+      digitalWrite(BCD_A, HIGH);
+      digitalWrite(BCD_B, HIGH);
+      digitalWrite(BCD_C, LOW);
+      digitalWrite(BCD_D, LOW);
+      break;
+    case 4:
+      digitalWrite(BCD_A, LOW);
+      digitalWrite(BCD_B, LOW);
+      digitalWrite(BCD_C, HIGH);
+      digitalWrite(BCD_D, LOW);
+      break;
+    case 5:
+      digitalWrite(BCD_A, HIGH);
+      digitalWrite(BCD_B, LOW);
+      digitalWrite(BCD_C, HIGH);
+      digitalWrite(BCD_D, LOW);
+      break;
+    case 6:
+      digitalWrite(BCD_A, LOW);
+      digitalWrite(BCD_B, HIGH);
+      digitalWrite(BCD_C, HIGH);
+      digitalWrite(BCD_D, LOW);
+      break;
+    case 7:
+      digitalWrite(BCD_A, HIGH);
+      digitalWrite(BCD_B, HIGH);
+      digitalWrite(BCD_C, HIGH);
+      digitalWrite(BCD_D, LOW);
+      break;
+    case 8:
+      digitalWrite(BCD_A, LOW);
+      digitalWrite(BCD_B, LOW);
+      digitalWrite(BCD_C, LOW);
+      digitalWrite(BCD_D, HIGH);
+      break;
+    case 9:
+      digitalWrite(BCD_A, HIGH);
+      digitalWrite(BCD_B, LOW);
+      digitalWrite(BCD_C, LOW);
+      digitalWrite(BCD_D, HIGH);
+      break;
+  }
+}
+
+void atualizarDisplay()
+{
+  displayDigit(contadorFitais % 10); // Mostra apenas unidades (0-9)
+}
+
 void debugSensores()
 {
   if (millis() - lastDebugTime >= debugInterval) {
@@ -142,6 +226,7 @@ void debugSensores()
     Serial.println("=== DEBUG SENSORES ===");
     Serial.print("LIGADO: "); Serial.println(ligado ? "SIM" : "NAO");
     Serial.print("WIGGLING: "); Serial.println(isWiggling ? "SIM" : "NAO");
+    Serial.print("CONTADOR FITAS: "); Serial.println(contadorFitais);
     Serial.print("LINHA HORIZONTAL: "); Serial.println(detectarLinhaHorizontal() ? "SIM" : "NAO");
     Serial.print("TURNFACTOR: "); Serial.println(turnFactor);
     
@@ -169,7 +254,7 @@ void beep(int duration)
   digitalWrite(BUZZ, LOW);
 }
 
-// FUNÇÃO PRINCIPAL COMPLETAMENTE REVISADA
+// FUNÇÃO PRINCIPAL COM CONTROLE DE CURVAS
 void seguirlinhaCorrigida()
 {
   bool LE_ativo = robo.digitalReadings[cIO::LE_];
@@ -177,67 +262,48 @@ void seguirlinhaCorrigida()
   bool CD_ativo = robo.digitalReadings[cIO::CD_];
   bool LD_ativo = robo.digitalReadings[cIO::LD_];
   
-  // DETECÇÃO MELHORADA PARA CURVAS DE 70-90 GRAUS
-  // Padrão 1: Curva direita aguda (70-90º)
+  // DETECÇÃO PARA CURVAS DE 70-90 GRAUS
   if (LE_ativo && CE_ativo && !CD_ativo && !LD_ativo) {
     setMotorsBalanceados(BASE_SPEED - 200, BASE_SPEED + 80);
     Serial.println("CURVA DIREITA AGUDA");
     return;
   }
   
-  // Padrão 2: Curva esquerda aguda (70-90º)  
   if (LD_ativo && CD_ativo && !CE_ativo && !LE_ativo) {
     setMotorsBalanceados(BASE_SPEED + 80, BASE_SPEED - 200);
     Serial.println("CURVA ESQUERDA AGUDA");
     return;
   }
   
-  // Padrão 3: Curva direita muito fechada (apenas LE)
   if (LE_ativo && !CE_ativo && !CD_ativo && !LD_ativo) {
     setMotorsBalanceados(BASE_SPEED - 180, BASE_SPEED + 60);
     Serial.println("CURVA DIREITA MUITO FECHADA");
     return;
   }
   
-  // Padrão 4: Curva esquerda muito fechada (apenas LD)
   if (LD_ativo && !CD_ativo && !CE_ativo && !LE_ativo) {
     setMotorsBalanceados(BASE_SPEED + 60, BASE_SPEED - 180);
     Serial.println("CURVA ESQUERDA MUITO FECHADA");
     return;
   }
   
-  // Padrão 5: Linha deslocada à direita
   if (LE_ativo && CE_ativo && CD_ativo && !LD_ativo) {
     setMotorsBalanceados(BASE_SPEED - 120, BASE_SPEED + 50);
     return;
   }
   
-  // Padrão 6: Linha deslocada à esquerda
   if (LD_ativo && CD_ativo && CE_ativo && !LE_ativo) {
     setMotorsBalanceados(BASE_SPEED + 50, BASE_SPEED - 120);
     return;
   }
   
-  // Padrão 7: Curva suave direita
-  if (LE_ativo && !CE_ativo && !CD_ativo && !LD_ativo) {
-    setMotorsBalanceados(BASE_SPEED - 100, BASE_SPEED + 30);
-    return;
-  }
-  
-  // Padrão 8: Curva suave esquerda
-  if (LD_ativo && !CD_ativo && !CE_ativo && !LE_ativo) {
-    setMotorsBalanceados(BASE_SPEED + 30, BASE_SPEED - 100);
-    return;
-  }
-  
   // LÓGICA PROPORCIONAL PARA CASOS NORMAIS
   turnFactor = 0;
-  if (LE_ativo) turnFactor -= 3;  // Peso maior para sensores laterais
+  if (LE_ativo) turnFactor -= 3;
   if (CE_ativo) turnFactor -= 2;
   if (CD_ativo) turnFactor += 2;
   if (LD_ativo) turnFactor += 3;
   
-  // Aplicar correção com histerese
   if (abs(turnFactor - lastTurnFactor) > 4) {
     turnFactor = lastTurnFactor + ((turnFactor > lastTurnFactor) ? 2 : -2);
   }
@@ -253,10 +319,17 @@ void setup()
 {
   Serial.begin(115200);
   
+  // Inicialização dos pinos dos motores e sensores
   for (size_t i = 0; i < 4; i++) {
     pinMode(robo.bobinas[i], OUTPUT);
     pinMode(robo.sensores[i], INPUT);
   }
+  
+  // Inicialização dos pinos do BCD
+  pinMode(BCD_A, OUTPUT);
+  pinMode(BCD_B, OUTPUT);
+  pinMode(BCD_C, OUTPUT);
+  pinMode(BCD_D, OUTPUT);
   
   pinMode(BUT, INPUT);
   pinMode(LED, OUTPUT);
@@ -265,70 +338,64 @@ void setup()
   digitalWrite(LED, LOW);
   digitalWrite(BUZZ, LOW);
   
-  button.setLongPressInterval(LONGPRESS);
+  // Inicializar display com 0
+  displayDigit(0);
   
   Serial.println("=== SISTEMA INICIADO ===");
-  Serial.println("MODO CORRIGIDO - CURVAS AGUDAS E PARADA CONFIÁVEL");
+  Serial.println("MODO CONTADOR AUTOMÁTICO - FITAS HORIZONTAIS");
   Serial.print("BASE_SPEED: "); Serial.println(BASE_SPEED);
-  Serial.print("TURN_SPEED: "); Serial.println(TURN_SPEED);
 }
 
 void loop()
 {
-  // 1. Ler sensores (SEMPRR primeiro)
+  // 1. Ler sensores
   leiturasSensores();
   atualizarLeiturasDigitais();
   
-  // 2. Verificar linha horizontal (ALTA PRIORIDADE)
-  if (detectarLinhaHorizontal() && ligado && !linhaHorizontalDetectada) {
-    Serial.println("*** LINHA HORIZONTAL DETECTADA - PARANDO ***");
-    parar();
-    linhaHorizontalDetectada = true;
-    ligado = false;
-    isWiggling = false;
-    digitalWrite(LED, LOW);
-    beep(500);
-    delay(300);
-    beep(500);
-    return;
+  // 2. Verificar e contar fitas horizontais
+  bool linhaHorizontalAtual = detectarLinhaHorizontal();
+  
+  // Detecta transição: não estava na linha horizontal e agora está
+  if (linhaHorizontalAtual && !ultimoEstadoHorizontal && ligado && !isWiggling) {
+    contadorFitais++;
+    Serial.print("*** FITA HORIZONTAL DETECTADA - CONTADOR: ");
+    Serial.println(contadorFitais);
+    
+    // Tocar buzzer por 300ms
+    digitalWrite(BUZZ, HIGH);
+    lastBuzzerTime = millis();
+    
+    // Atualizar display
+    atualizarDisplay();
+  }
+  ultimoEstadoHorizontal = linhaHorizontalAtual;
+  
+  // Desligar buzzer após 300ms
+  if (digitalRead(BUZZ) == HIGH && (millis() - lastBuzzerTime >= BUZZER_DURATION)) {
+    digitalWrite(BUZZ, LOW);
   }
   
   // 3. Debug
   debugSensores();
   
-  // 4. Verificar botão
+  // 4. Verificar botão (apenas para ligar/desligar)
   if (verificarBotao()) {
-    if (linhaHorizontalDetectada) {
-      linhaHorizontalDetectada = false;
-      ligado = true;
-      Serial.println(">>> REINICIANDO APOS LINHA HORIZONTAL <<<");
+    ligado = !ligado;
+    if (ligado) {
+      Serial.println(">>> ROBO LIGADO - CONTADOR ATIVO <<<");
       digitalWrite(LED, HIGH);
       beep(100); delay(100); beep(100);
     } else {
-      ligado = !ligado;
-      if (ligado) {
-        Serial.println(">>> ROBO LIGADO - CORRIGIDO <<<");
-        digitalWrite(LED, HIGH);
-        beep(100); delay(100); beep(100);
-      } else {
-        Serial.println(">>> ROBO DESLIGADO <<<");
-        digitalWrite(LED, LOW);
-        parar();
-        isWiggling = false;
-        linhaHorizontalDetectada = false;
-        beep(300);
-      }
+      Serial.println(">>> ROBO DESLIGADO <<<");
+      digitalWrite(LED, LOW);
+      parar();
+      isWiggling = false;
+      // Não zera o contador ao desligar
+      beep(300);
     }
   }
 
-  // 5. Se linha horizontal foi detectada, ficar parado
-  if (linhaHorizontalDetectada) {
-    parar();
-    digitalWrite(LED, LOW);
-    return;
-  }
-
-  // 6. Lógica principal se estiver ligado
+  // 5. Lógica principal se estiver ligado
   if (ligado) {
     // Verificar se todos os sensores estão na linha (coluna)
     bool todosNaLinha = true;
