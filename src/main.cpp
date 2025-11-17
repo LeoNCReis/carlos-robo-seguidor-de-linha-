@@ -40,12 +40,13 @@ struct controlIO
   bool digitalReadings[4];
 } typedef cIO;
 
-// CONSTANTES - VELOCIDADE DE COMPETIÇÃO
-const int SENSIBILIDADE = 750;    // VALOR CRÍTICO - TESTE NO SERIAL
+// CONSTANTES REVISADAS
+const int SENSIBILIDADE = 750;
 const int LONGPRESS = 2000;
-const int BASE_SPEED = 220;       // Velocidade base alta
-const int TURN_SPEED = 150;       // AUMENTADO: correções mais agressivas para curvas
-const int SHARP_TURN_SPEED = 200; // NOVO: velocidade específica para curvas fechadas
+const int BASE_SPEED = 200;           // Velocidade balanceada
+const int AJUSTE_ESQUERDO = 25;
+const int AJUSTE_DIREITO = 0;
+const int TURN_SPEED = 180;           // Correção forte
 const int WIGGLE_DURATION = 3000;
 const float WAVE_FREQUENCY = 0.8;
 
@@ -54,44 +55,35 @@ unsigned long lastDebugTime = 0;
 unsigned long debugInterval = 500;
 bool ligado = false;
 bool isWiggling = false;
-bool linhaHorizontalDetectada = false; // NOVO: flag para linha horizontal
+bool linhaHorizontalDetectada = false;
 unsigned long sineWaveStartTime = 0;
 const unsigned long debounce = 50;
 int turnFactor = 0;
 int lastTurnFactor = 0;
 
 // DECLARAÇÕES DE FUNÇÕES
-void controleDirecao(int direitaFrente, int direitaTras, int esquerdaFrente, int esquerdaTras);
-void setMotors(int leftSpeed, int rightSpeed);
+void setMotorsBalanceados(int leftSpeed, int rightSpeed);
 void parar();
 void leiturasSensores();
 void atualizarLeiturasDigitais();
 void debugSensores();
 bool verificarBotao();
 void beep(int duration);
-void seguirlinhaCompeticao();
-bool detectarLinhaHorizontal(); // NOVA FUNÇÃO
+void seguirlinhaCorrigida();  // FUNÇÃO REVISADA
+bool detectarLinhaHorizontal();
 
 // INSTÂNCIAS
 cIO robo;
 AcksenButton button(BUT, ACKSEN_BUTTON_MODE_LONGPRESS, debounce, INPUT);
 
-// DEFINIÇÕES DAS FUNÇÕES
-void controleDirecao(int direitaFrente, int direitaTras, int esquerdaFrente, int esquerdaTras)
+void setMotorsBalanceados(int leftSpeed, int rightSpeed)
 {
-  analogWrite(FDIR, direitaFrente);
-  analogWrite(TDIR, direitaTras);
-  analogWrite(FESQ, esquerdaFrente);
-  analogWrite(TESQ, esquerdaTras);
-}
-
-void setMotors(int leftSpeed, int rightSpeed)
-{
-  // Garantir que as velocidades estão dentro do range 0-255
+  leftSpeed += AJUSTE_ESQUERDO;
+  rightSpeed += AJUSTE_DIREITO;
+  
   leftSpeed = constrain(leftSpeed, 0, 255);
   rightSpeed = constrain(rightSpeed, 0, 255);
   
-  // Motor esquerdo: FESQ para frente, TESQ para trás
   if (leftSpeed >= 0) {
     analogWrite(FESQ, leftSpeed);
     analogWrite(TESQ, 0);
@@ -100,7 +92,6 @@ void setMotors(int leftSpeed, int rightSpeed)
     analogWrite(TESQ, abs(leftSpeed));
   }
   
-  // Motor direito: FDIR para frente, TDIR para trás
   if (rightSpeed >= 0) {
     analogWrite(FDIR, rightSpeed);
     analogWrite(TDIR, 0);
@@ -112,12 +103,14 @@ void setMotors(int leftSpeed, int rightSpeed)
 
 void parar()
 {
-  controleDirecao(0, 0, 0, 0);
+  analogWrite(FESQ, 0);
+  analogWrite(TESQ, 0);
+  analogWrite(FDIR, 0);
+  analogWrite(TDIR, 0);
 }
 
 void leiturasSensores()
 {
-  // Ler valores analógicos dos sensores
   robo.readings[cIO::LD_] = analogRead(LD);
   robo.readings[cIO::CD_] = analogRead(CD);
   robo.readings[cIO::CE_] = analogRead(CE);
@@ -126,13 +119,11 @@ void leiturasSensores()
 
 void atualizarLeiturasDigitais()
 {
-  // Converter leituras analógicas para digitais baseado na sensibilidade
   for (int i = 0; i < 4; i++) {
     robo.digitalReadings[i] = (robo.readings[i] < SENSIBILIDADE);
   }
 }
 
-// NOVA FUNÇÃO: Detectar linha horizontal (todos os sensores pretos)
 bool detectarLinhaHorizontal()
 {
   for (int i = 0; i < 4; i++) {
@@ -149,27 +140,18 @@ void debugSensores()
     lastDebugTime = millis();
     
     Serial.println("=== DEBUG SENSORES ===");
-    Serial.print("SENSIBILIDADE: ");
-    Serial.println(SENSIBILIDADE);
-    Serial.print("LIGADO: ");
-    Serial.println(ligado ? "SIM" : "NAO");
-    Serial.print("WIGGLING: ");
-    Serial.println(isWiggling ? "SIM" : "NAO");
-    Serial.print("LINHA HORIZONTAL: ");
-    Serial.println(linhaHorizontalDetectada ? "SIM" : "NAO");
+    Serial.print("LIGADO: "); Serial.println(ligado ? "SIM" : "NAO");
+    Serial.print("WIGGLING: "); Serial.println(isWiggling ? "SIM" : "NAO");
+    Serial.print("LINHA HORIZONTAL: "); Serial.println(detectarLinhaHorizontal() ? "SIM" : "NAO");
+    Serial.print("TURNFACTOR: "); Serial.println(turnFactor);
     
     for (size_t i = 0; i < 4; i++) {
       Serial.print(robo.debugsensores[i]);
-      Serial.print(": ");
-      Serial.print(robo.readings[i]);
-      Serial.print(" -> ");
-      Serial.print(robo.digitalReadings[i] ? "LINHA" : "FORA");
+      Serial.print(": "); Serial.print(robo.readings[i]);
+      Serial.print(" -> "); Serial.print(robo.digitalReadings[i] ? "LINHA" : "FORA");
       Serial.print(" | ");
     }
     Serial.println();
-    
-    Serial.print("TurnFactor: ");
-    Serial.println(turnFactor);
     Serial.println("=====================");
   }
 }
@@ -177,11 +159,7 @@ void debugSensores()
 bool verificarBotao() 
 {
   button.refreshStatus();
-  bool pressed = button.onPressed();
-  if (pressed) {
-    Serial.println("Botao pressionado!");
-  }
-  return pressed;
+  return button.onPressed();
 }
 
 void beep(int duration) 
@@ -191,70 +169,83 @@ void beep(int duration)
   digitalWrite(BUZZ, LOW);
 }
 
-// NOVA FUNÇÃO - LÓGICA AVANÇADA PARA SEGUIR LINHA EM COMPETIÇÃO
-void seguirlinhaCompeticao()
+// FUNÇÃO PRINCIPAL COMPLETAMENTE REVISADA
+void seguirlinhaCorrigida()
 {
-  // LÓGICA MELHORADA PARA CURVAS FECHADAS
   bool LE_ativo = robo.digitalReadings[cIO::LE_];
   bool CE_ativo = robo.digitalReadings[cIO::CE_];
   bool CD_ativo = robo.digitalReadings[cIO::CD_];
   bool LD_ativo = robo.digitalReadings[cIO::LD_];
   
-  // CASOS ESPECIAIS PARA CURVAS FECHADAS
-  if (LE_ativo && !CE_ativo && !CD_ativo && !LD_ativo) {
-    // CURVA FECHADA PARA DIREITA - apenas sensor LE ativo
-    Serial.println("CURVA FECHADA DIREITA DETECTADA");
-    setMotors(BASE_SPEED - SHARP_TURN_SPEED, BASE_SPEED + 50);
-    return;
-  }
-  
-  if (LD_ativo && !CD_ativo && !CE_ativo && !LE_ativo) {
-    // CURVA FECHADA PARA ESQUERDA - apenas sensor LD ativo
-    Serial.println("CURVA FECHADA ESQUERDA DETECTADA");
-    setMotors(BASE_SPEED + 50, BASE_SPEED - SHARP_TURN_SPEED);
-    return;
-  }
-  
+  // DETECÇÃO MELHORADA PARA CURVAS DE 70-90 GRAUS
+  // Padrão 1: Curva direita aguda (70-90º)
   if (LE_ativo && CE_ativo && !CD_ativo && !LD_ativo) {
-    // CURVA SUAVE PARA DIREITA - sensores LE e CE ativos
-    setMotors(BASE_SPEED - TURN_SPEED, BASE_SPEED);
+    setMotorsBalanceados(BASE_SPEED - 200, BASE_SPEED + 80);
+    Serial.println("CURVA DIREITA AGUDA");
     return;
   }
   
+  // Padrão 2: Curva esquerda aguda (70-90º)  
   if (LD_ativo && CD_ativo && !CE_ativo && !LE_ativo) {
-    // CURVA SUAVE PARA ESQUERDA - sensores LD e CD ativos
-    setMotors(BASE_SPEED, BASE_SPEED - TURN_SPEED);
+    setMotorsBalanceados(BASE_SPEED + 80, BASE_SPEED - 200);
+    Serial.println("CURVA ESQUERDA AGUDA");
     return;
   }
   
+  // Padrão 3: Curva direita muito fechada (apenas LE)
+  if (LE_ativo && !CE_ativo && !CD_ativo && !LD_ativo) {
+    setMotorsBalanceados(BASE_SPEED - 180, BASE_SPEED + 60);
+    Serial.println("CURVA DIREITA MUITO FECHADA");
+    return;
+  }
+  
+  // Padrão 4: Curva esquerda muito fechada (apenas LD)
+  if (LD_ativo && !CD_ativo && !CE_ativo && !LE_ativo) {
+    setMotorsBalanceados(BASE_SPEED + 60, BASE_SPEED - 180);
+    Serial.println("CURVA ESQUERDA MUITO FECHADA");
+    return;
+  }
+  
+  // Padrão 5: Linha deslocada à direita
   if (LE_ativo && CE_ativo && CD_ativo && !LD_ativo) {
-    // LINHA À DIREITA - virar moderadamente
-    setMotors(BASE_SPEED - 80, BASE_SPEED + 40);
+    setMotorsBalanceados(BASE_SPEED - 120, BASE_SPEED + 50);
     return;
   }
   
+  // Padrão 6: Linha deslocada à esquerda
   if (LD_ativo && CD_ativo && CE_ativo && !LE_ativo) {
-    // LINHA À ESQUERDA - virar moderadamente
-    setMotors(BASE_SPEED + 40, BASE_SPEED - 80);
+    setMotorsBalanceados(BASE_SPEED + 50, BASE_SPEED - 120);
     return;
   }
   
-  // LÓGICA PADRÃO PARA CASOS NORMAIS
-  turnFactor = 0;
-  if (LE_ativo) turnFactor -= 2;
-  if (CE_ativo) turnFactor -= 1;
-  if (CD_ativo) turnFactor += 1;
-  if (LD_ativo) turnFactor += 2;
-  
-  // Aplicar correção com histerese para evitar oscilações
-  if (abs(turnFactor - lastTurnFactor) > 3) {
-    turnFactor = lastTurnFactor + ((turnFactor > lastTurnFactor) ? 1 : -1);
+  // Padrão 7: Curva suave direita
+  if (LE_ativo && !CE_ativo && !CD_ativo && !LD_ativo) {
+    setMotorsBalanceados(BASE_SPEED - 100, BASE_SPEED + 30);
+    return;
   }
   
-  int leftMotorSpeed = BASE_SPEED + (turnFactor * TURN_SPEED);
-  int rightMotorSpeed = BASE_SPEED - (turnFactor * TURN_SPEED);
+  // Padrão 8: Curva suave esquerda
+  if (LD_ativo && !CD_ativo && !CE_ativo && !LE_ativo) {
+    setMotorsBalanceados(BASE_SPEED + 30, BASE_SPEED - 100);
+    return;
+  }
   
-  setMotors(leftMotorSpeed, rightMotorSpeed);
+  // LÓGICA PROPORCIONAL PARA CASOS NORMAIS
+  turnFactor = 0;
+  if (LE_ativo) turnFactor -= 3;  // Peso maior para sensores laterais
+  if (CE_ativo) turnFactor -= 2;
+  if (CD_ativo) turnFactor += 2;
+  if (LD_ativo) turnFactor += 3;
+  
+  // Aplicar correção com histerese
+  if (abs(turnFactor - lastTurnFactor) > 4) {
+    turnFactor = lastTurnFactor + ((turnFactor > lastTurnFactor) ? 2 : -2);
+  }
+  
+  int leftMotorSpeed = BASE_SPEED + (turnFactor * TURN_SPEED / 2);
+  int rightMotorSpeed = BASE_SPEED - (turnFactor * TURN_SPEED / 2);
+  
+  setMotorsBalanceados(leftMotorSpeed, rightMotorSpeed);
   lastTurnFactor = turnFactor;
 }
 
@@ -262,7 +253,6 @@ void setup()
 {
   Serial.begin(115200);
   
-  // Inicialização dos pinos
   for (size_t i = 0; i < 4; i++) {
     pinMode(robo.bobinas[i], OUTPUT);
     pinMode(robo.sensores[i], INPUT);
@@ -278,24 +268,30 @@ void setup()
   button.setLongPressInterval(LONGPRESS);
   
   Serial.println("=== SISTEMA INICIADO ===");
-  Serial.println("MODO COMPETICAO - COM PARADA POR LINHA HORIZONTAL");
-  Serial.print("BASE_SPEED: ");
-  Serial.println(BASE_SPEED);
-  Serial.print("TURN_SPEED: ");
-  Serial.println(TURN_SPEED);
-  Serial.print("SHARP_TURN_SPEED: ");
-  Serial.println(SHARP_TURN_SPEED);
-  Serial.print("Sensibilidade atual: ");
-  Serial.println(SENSIBILIDADE);
+  Serial.println("MODO CORRIGIDO - CURVAS AGUDAS E PARADA CONFIÁVEL");
+  Serial.print("BASE_SPEED: "); Serial.println(BASE_SPEED);
+  Serial.print("TURN_SPEED: "); Serial.println(TURN_SPEED);
 }
 
 void loop()
 {
-  // 1. Ler sensores
+  // 1. Ler sensores (SEMPRR primeiro)
   leiturasSensores();
-  
-  // 2. Processar leituras
   atualizarLeiturasDigitais();
+  
+  // 2. Verificar linha horizontal (ALTA PRIORIDADE)
+  if (detectarLinhaHorizontal() && ligado && !linhaHorizontalDetectada) {
+    Serial.println("*** LINHA HORIZONTAL DETECTADA - PARANDO ***");
+    parar();
+    linhaHorizontalDetectada = true;
+    ligado = false;
+    isWiggling = false;
+    digitalWrite(LED, LOW);
+    beep(500);
+    delay(300);
+    beep(500);
+    return;
+  }
   
   // 3. Debug
   debugSensores();
@@ -303,23 +299,17 @@ void loop()
   // 4. Verificar botão
   if (verificarBotao()) {
     if (linhaHorizontalDetectada) {
-      // Se estava parado por linha horizontal, reiniciar
       linhaHorizontalDetectada = false;
       ligado = true;
       Serial.println(">>> REINICIANDO APOS LINHA HORIZONTAL <<<");
       digitalWrite(LED, HIGH);
-      beep(100);
-      delay(100);
-      beep(100);
+      beep(100); delay(100); beep(100);
     } else {
-      // Botão normal - ligar/desligar
       ligado = !ligado;
       if (ligado) {
-        Serial.println(">>> ROBO LIGADO <<<");
+        Serial.println(">>> ROBO LIGADO - CORRIGIDO <<<");
         digitalWrite(LED, HIGH);
-        beep(100);
-        delay(100);
-        beep(100);
+        beep(100); delay(100); beep(100);
       } else {
         Serial.println(">>> ROBO DESLIGADO <<<");
         digitalWrite(LED, LOW);
@@ -331,31 +321,16 @@ void loop()
     }
   }
 
-  // 5. Se linha horizontal foi detectada, ficar parado até botão
+  // 5. Se linha horizontal foi detectada, ficar parado
   if (linhaHorizontalDetectada) {
     parar();
     digitalWrite(LED, LOW);
-    return; // Não faz mais nada até reiniciar com botão
+    return;
   }
 
   // 6. Lógica principal se estiver ligado
   if (ligado) {
-    
-    // Verificar se detectou linha horizontal
-    if (detectarLinhaHorizontal()) {
-      Serial.println("*** LINHA HORIZONTAL DETECTADA - PARANDO ***");
-      parar();
-      linhaHorizontalDetectada = true;
-      ligado = false;
-      isWiggling = false;
-      digitalWrite(LED, LOW);
-      beep(500);
-      delay(300);
-      beep(500);
-      return;
-    }
-    
-    // Verificar se todos os sensores estão na linha (coluna) - lógica antiga
+    // Verificar se todos os sensores estão na linha (coluna)
     bool todosNaLinha = true;
     for (int i = 0; i < 4; i++) {
       if (!robo.digitalReadings[i]) {
@@ -373,9 +348,6 @@ void loop()
     
     // Modo Wiggling (busca)
     if (isWiggling) {
-      Serial.println("Modo Wiggling Ativo");
-      
-      // Verificar se encontrou linha durante a busca
       bool algumSensorNaLinha = false;
       for (int i = 0; i < 4; i++) {
         if (robo.digitalReadings[i]) {
@@ -387,11 +359,8 @@ void loop()
       if (algumSensorNaLinha && !todosNaLinha) {
         Serial.println("Linha encontrada durante busca!");
         isWiggling = false;
-        beep(150);
-        delay(80);
-        beep(150);
+        beep(150); delay(80); beep(150);
       }
-      // Continuar busca se não esgotou o tempo
       else if (millis() - sineWaveStartTime < WIGGLE_DURATION) {
         float time = (millis() - sineWaveStartTime) / 1000.0;
         float sineValue = sin(time * 2.0 * PI * WAVE_FREQUENCY);
@@ -399,9 +368,8 @@ void loop()
         int leftMotorSpeed = BASE_SPEED + (sineValue * TURN_SPEED);
         int rightMotorSpeed = BASE_SPEED - (sineValue * TURN_SPEED);
         
-        setMotors(leftMotorSpeed, rightMotorSpeed);
+        setMotorsBalanceados(leftMotorSpeed, rightMotorSpeed);
       }
-      // Tempo esgotado
       else {
         Serial.println("Tempo de busca esgotado - PARANDO");
         parar();
@@ -410,14 +378,13 @@ void loop()
         digitalWrite(LED, LOW);
       }
     }
-    // Modo Seguidor de Linha Normal - USANDO A NOVA LÓGICA
+    // Modo Seguidor de Linha Normal
     else {
-      seguirlinhaCompeticao();
+      seguirlinhaCorrigida();
     }
   } else {
-    // Robô desligado - garantir que está parado
     parar();
   }
   
-  delay(25); // Delay reduzido para resposta ainda mais rápida
+  delay(25);
 }
